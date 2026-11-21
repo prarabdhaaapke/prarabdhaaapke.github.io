@@ -948,6 +948,23 @@ function makePrashna(JT) {
     legal:    { h: 6,  k: ['Mars'],             en: 'Court case or dispute',   hi: 'कोर्ट केस / विवाद', q: 'Will I win this case?', legal: true },
     child:    { h: 5,  k: ['Jupiter'],          en: 'Children',                hi: 'संतान',           q: 'Will we be blessed with a child?' },
   };
+  // topic from the user's own words (wins over the chip when it is clearly about something else)
+  const QRE = [
+    ['lost', /\b(lost|missing|stolen|theft|chori|kho\s?gay|kho\s?gai|misplac|cannot find|can't find|where is my)\w*/i],
+    ['ex', /\b(ex|breakup|break up|broke up|patch up|wapas|vapas|come back|comeback|reunion|reunite|get back together)\b/i],
+    ['marriage', /\b(marri|marry|shaadi|shadi|vivah|wedding|rishta|engage|sagai)\w*/i],
+    ['love', /\b(love|lover|girlfriend|boyfriend|crush|pyar|pyaar|relationship|propose|date|text me|call me|like me)\w*/i],
+    ['exam', /\b(exam|result|pass|marks|rank|upsc|neet|jee|ssc|admission|college|study|padhai)\w*/i],
+    ['job', /\b(job|naukri|career|promotion|interview|offer letter|appraisal|transfer|resign|placement|selection|selected)\w*/i],
+    ['business', /\b(business|startup|vyapar|shop|dukaan|deal|client|tender|contract)\w*/i],
+    ['legal', /\b(court|case|legal|dispute|police|lawsuit|litigation|fir|bail)\w*/i],
+    ['health', /\b(health|sick|ill|disease|sehat|surgery|operation|hospital|recover|fever|treatment)\w*/i],
+    ['child', /\b(child|baby|pregnan|conceive|santan|bachcha|kids)\w*/i],
+    ['travel', /\b(abroad|foreign|videsh|visa|travel|trip|journey|yatra|flight|settle)\w*/i],
+    ['property', /\b(house|flat|property|land|plot|makaan|makan|ghar|home loan)\w*/i],
+    ['money', /\b(money|paisa|paise|loan|debt|karz|payment|salary|invest|profit|refund|dhan)\w*/i]];
+  function topicOf(q) { if (!q) return null; for (const [k, re] of QRE) if (re.test(q)) return k; return null; }
+
   const ORB = { Sun: 15, Moon: 12, Mars: 8, Mercury: 7, Jupiter: 9, Venus: 7, Saturn: 9 };   // Tajik deeptamsha
   const ASPECTS = [0, 60, 90, 120, 180, 240, 270, 300];
   const ASP_NAME = { 0: 'conjunction', 60: 'sextile', 300: 'sextile', 90: 'square', 270: 'square', 120: 'trine', 240: 'trine', 180: 'opposition' };
@@ -985,7 +1002,7 @@ function makePrashna(JT) {
     return 'after a long delay (more than a year)';
   }
 
-  function judge(C, cat) {
+  function judge(C, cat, natal) {
     const K = CATS[cat]; if (!K) throw new Error('unknown category');
     const P = C.planets, Lg = C.lagna;
     const L1 = JT.LORDS[Lg], hq = K.h, Lq = JT.LORDS[(Lg + hq - 1) % 12];
@@ -1055,13 +1072,26 @@ function makePrashna(JT) {
     else if ([1, 4, 7, 10, 5, 9, 11].includes(P.Moon.house)) add(0.5, 'The Moon is well placed in the ' + ord(P.Moon.house) + ' house.');
     add(waxing ? 0.5 : -0.5, 'The Moon is ' + (waxing ? 'waxing (growing light): energy builds.' : 'waning (fading light): things move slower.'));
 
-    // 5. nature of the rising sign
+    // 5. personal layer: how this moment sits with the asker's own birth chart
+    if (natal && natal.moon && natal.planets) {
+      const t = ((C.moon.nak - natal.moon.nak + 27) % 27) % 9 + 1;
+      const TN = ['', 'Janma', 'Sampat', 'Vipat', 'Kshema', 'Pratyari', 'Sadhaka', 'Naidhana', 'Mitra', 'Parama Mitra'];
+      const TW = [0, -0.5, 1, -1, 1, -1, 1, -1.5, 1, 1];
+      add(TW[t], 'For you: the Moon of this moment is in ' + JT.NAKS[C.moon.nak] + ', the ' + ord(t) + ' tara (' + TN[t] + ') from your birth nakshatra ' + JT.NAKS[natal.moon.nak] + (TW[t] > 0 ? ': a supportive star for you.' : TW[t] < -1 ? ': a difficult star for you; go slowly.' : t === 1 ? ': your own star, which asks for extra care.' : ': a testing star for you.'));
+      const cb = ((C.moon.sign - natal.moon.sign + 12) % 12) + 1;
+      if ([1, 3, 6, 7, 10, 11].includes(cb)) add(0.5, 'For you: the Moon is ' + ord(cb) + ' from your birth Moon sign ' + SN[natal.moon.sign] + ' (good Chandra bala).');
+      else if ([4, 8, 12].includes(cb)) add(-0.5, 'For you: the Moon is ' + ord(cb) + ' from your birth Moon sign ' + SN[natal.moon.sign] + ' (weak Chandra bala).');
+      if (Lg === natal.lagna || Lg === natal.moon.sign) add(1, 'For you: your own birth ' + (Lg === natal.lagna ? 'lagna' : 'Moon sign') + ' (' + SN[Lg] + ') is rising right now, so this question is closely tied to you.');
+      else { const fl = ((Lg - natal.lagna + 12) % 12) + 1; if ([6, 8, 12].includes(fl)) add(-0.5, 'For you: this moment\'s lagna is ' + ord(fl) + ' from your birth lagna, a hidden house for you.'); else if ([5, 9, 10, 11].includes(fl)) add(0.5, 'For you: this moment\'s lagna is ' + ord(fl) + ' from your birth lagna, a supportive house for you.'); }
+    }
+
+    // 6. nature of the rising sign
     const mode = Lg % 3 === 0 ? 'movable' : Lg % 3 === 1 ? 'fixed' : 'dual';
     const modeNote = K.lost
       ? (mode === 'fixed' ? 'Fixed lagna: the item has not moved far; search close to where you last had it.' : mode === 'movable' ? 'Movable lagna: the item may have been moved or taken further away.' : 'Dual lagna: the item may be found after a second search.')
       : (mode === 'movable' ? 'Movable lagna (' + SN[Lg] + '): things change quickly.' : mode === 'fixed' ? 'Fixed lagna (' + SN[Lg] + '): the present situation tends to stay as it is for a while.' : 'Dual lagna (' + SN[Lg] + '): a mixed result, or it happens in two steps.');
 
-    // 6. is the chart fit to judge? (very early or very late lagna degree)
+    // 7. is the chart fit to judge? (very early or very late lagna degree)
     const ad = C.asc % 30;
     const caution = ad < 3 ? 'The rising degree is very early (' + ad.toFixed(1) + '°): the matter is not ripe yet. Classical texts advise asking again later.' :
       ad > 27 ? 'The rising degree is very late (' + ad.toFixed(1) + '°): the matter may already be decided.' : null;
@@ -1074,7 +1104,7 @@ function makePrashna(JT) {
       mode, modeNote, caution, moonWaxing: waxing, lagnaSign: Lg,
     };
   }
-  return { CATS, cast, judge, link };
+  return { CATS, cast, judge, link, topicOf };
 }
 if (typeof module !== 'undefined') module.exports = makePrashna;
 
@@ -1467,7 +1497,7 @@ function load(){let r=null;try{r=JSON.parse(localStorage.getItem(KEY)||'null');}
   S.tab=pick(r.tab,['home','kundli','learn','match','heal','num','more','onboard'],'home');
   const p=r.profile;if(p&&typeof p==='object'&&typeof p.name==='string'&&p.birth&&typeof p.birth==='object'){const b={};['y','m','d','hh','mm','tz','lat','lon'].forEach(k=>b[k]=Number(p.birth[k]));if(validBirth(b))S.profile={name:p.name.slice(0,40),birth:b,city:Number.isInteger(p.city)?p.city:'x',place:typeof p.place==='string'?p.place.slice(0,80):undefined,tzn:typeof p.tzn==='string'&&/^[A-Za-z0-9_\/+-]{1,40}$/.test(p.tzn)?p.tzn:undefined};}
   S.consent=r.consent===true;
-  S.prashna=Array.isArray(r.prashna)?r.prashna.filter(x=>x&&typeof x==='object'&&typeof x.id==='string'&&/^\d{10,16}$/.test(x.id)&&typeof x.cat==='string'&&/^[a-z]{2,10}$/.test(x.cat)&&Array.isArray(x.u)&&x.u.length===5&&x.u.every(Number.isInteger)&&Number.isFinite(x.lat)&&Number.isFinite(x.lon)&&Math.abs(x.lat)<=66&&Math.abs(x.lon)<=180).slice(0,30).map(x=>({id:x.id,cat:x.cat,q:typeof x.q==='string'?x.q.slice(0,200):'',day:typeof x.day==='string'?x.day.slice(0,10):'',when:typeof x.when==='string'?x.when.slice(0,40):'',place:typeof x.place==='string'?x.place.slice(0,80):'',lat:x.lat,lon:x.lon,u:x.u})):[];
+  S.prashna=Array.isArray(r.prashna)?r.prashna.filter(x=>x&&typeof x==='object'&&typeof x.id==='string'&&/^\d{10,16}$/.test(x.id)&&typeof x.cat==='string'&&/^[a-z]{2,10}$/.test(x.cat)&&Array.isArray(x.u)&&x.u.length===5&&x.u.every(Number.isInteger)&&Number.isFinite(x.lat)&&Number.isFinite(x.lon)&&Math.abs(x.lat)<=66&&Math.abs(x.lon)<=180).slice(0,30).map(x=>({id:x.id,cat:x.cat,auto:x.auto===1?1:0,q:typeof x.q==='string'?x.q.slice(0,200):'',day:typeof x.day==='string'?x.day.slice(0,10):'',when:typeof x.when==='string'?x.when.slice(0,40):'',place:typeof x.place==='string'?x.place.slice(0,80):'',lat:x.lat,lon:x.lon,u:x.u})):[];
   S.token=(typeof r.token==='string'&&/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(r.token)&&r.token.length<1000)?r.token:null;
   if(r.days&&typeof r.days==='object'){S.days={};for(let i=1;i<=21;i++)if(r.days[i]===1)S.days[i]=1;}
   S.paid={};/* entitlements are NEVER trusted from device storage; the live app asks the server */
@@ -1780,15 +1810,17 @@ function vPrashna(){if(!PR)return vHome2();const cat=PR.CATS[S.sel.pcat]?S.sel.p
   o+='<section class="card"><h3>1. What is your question about?</h3><div class="chips">'+Object.keys(PR.CATS).map(k=>'<button type="button" class="chip'+(k===cat?' on':'')+'" data-act="pcat" data-v="'+k+'">'+esc(PR.CATS[k].en)+'</button>').join('')+'</div></section>';
   if(done){o+='<section class="card"><p>You already asked about <b>'+esc(K.en.toLowerCase())+'</b> today. Tradition says a Prashna is asked once, with a sincere mind; asking again the same day only repeats the doubt.</p><button class="btn" data-act="go" data-v="pr:'+done.id+'">See today\'s answer</button><p class="mut small">You can ask about this again tomorrow, or choose a different topic above.</p></section>';}
   else{const pl=PGEO?{label:'Current location ('+PGEO.lat.toFixed(2)+', '+PGEO.lon.toFixed(2)+')',lat:PGEO.lat,lon:PGEO.lon,tz:5.5}:(S.profile?{label:S.profile.place||'',lat:S.profile.birth.lat,lon:S.profile.birth.lon,tz:S.profile.birth.tz,tzn:S.profile.tzn}:null);
-    o+='<form id="pf" class="card" autocomplete="off"><h3>2. Ask it in your own words</h3><textarea name="q" maxlength="200" rows="2" placeholder="'+esc(K.q)+'"></textarea><h3>3. Where are you right now?</h3><button type="button" class="btn ghost" data-act="pgeo">Use my current location</button>'+placeField(pl,'Your current town or city')+'<p class="mut small">Close your eyes for a moment, think of the question clearly, then press the button. The time is taken from your phone.</p><button class="btn" type="submit">Cast my Prashna now</button><p class="err" id="perr" role="alert"></p></form>';}
+    o+='<form id="pf" class="card" autocomplete="off"><h3>2. Ask it in your own words</h3><textarea name="q" maxlength="200" rows="2" placeholder="'+esc(K.q)+'"></textarea><h3>3. Where are you right now?</h3><button type="button" class="btn ghost" data-act="pgeo">Use my current location</button>'+placeField(pl,'Your current town or city')+'<p class="mut small">Close your eyes for a moment, think of the question clearly, then press the button. The time is taken from your phone.</p><p class="mut small">How it works: a Prashna reads the sky at the minute you ask, for the topic you ask about.'+(S.profile&&CH?' It is then matched with your own birth star and Moon sign, so two people asking at the same minute can get different answers.':' Save your birth details to make it personal to you.')+'</p><button class="btn" type="submit">Cast my Prashna now</button><p class="err" id="perr" role="alert"></p></form>';}
   const hist=(S.prashna||[]).slice(0,8);
-  if(hist.length)o+='<h2 class="sec">My Prashnas</h2>'+hist.map(x=>{let j=null;try{j=PR.judge(JT.computeChart(pAt(x)),x.cat);}catch(e){}return '<button class="tile wide" data-act="go" data-v="pr:'+x.id+'"><b>'+esc(PR.CATS[x.cat].en)+(x.q?': '+esc(x.q):'')+'</b><small>'+esc(x.when)+' · '+(j?esc(j.title):'')+'</small></button>';}).join('');
+  if(hist.length)o+='<h2 class="sec">My Prashnas</h2>'+hist.map(x=>{let j=null;try{j=PR.judge(JT.computeChart(pAt(x)),x.cat,S.profile&&CH?CH:null);}catch(e){}return '<button class="tile wide" data-act="go" data-v="pr:'+x.id+'"><b>'+esc(PR.CATS[x.cat].en)+(x.q?': '+esc(x.q):'')+'</b><small>'+esc(x.when)+' · '+(j?esc(j.title):'')+'</small></button>';}).join('');
   return o+'<p class="mut small">Follows classical Prashna rules (Prashna Tantra, Tajik Neelakanthi, Prashna Marga). '+DISC+'</p>';}
-function vPrashnaResult(id){const x=(S.prashna||[]).find(e=>e.id===id);if(!x||!PR)return vPrashna();const C=JT.computeChart(pAt(x)),j=PR.judge(C,x.cat),K=PR.CATS[x.cat];
+function vPrashnaResult(id){const x=(S.prashna||[]).find(e=>e.id===id);if(!x||!PR)return vPrashna();const C=JT.computeChart(pAt(x)),j=PR.judge(C,x.cat,S.profile&&CH?CH:null),K=PR.CATS[x.cat];
   const col={yes:'good',likely:'good',mixed:'mid',no:'bad'}[j.verdict];
   let o='<button class="back" data-act="go" data-v="prashna">&larr; Back</button>'+head('Prashna: '+K.en,(x.q?'"'+x.q+'" · ':'')+x.when+' · '+x.place);
   o+='<section class="card verdict '+col+'"><p class="small mut">The answer</p><h2>'+esc(j.title)+'</h2><p>'+esc(j.title_hi)+'</p>'+(j.when?'<p><b>Timing:</b> '+esc(j.when)+', going by how fast the planets are closing in.</p>':'')+'</section>';
+  if(x.auto)o+='<div class="warn" role="note">Your words are about <b>'+esc(K.en.toLowerCase())+'</b>, so the chart was read for that topic.</div>';
   if(j.caution)o+='<div class="warn" role="note">'+esc(j.caution)+'</div>';
+  if(!(S.profile&&CH))o+='<p class="mut small">This answer comes from the moment alone. Save your birth details to add your own birth star and Moon sign to the reading.</p>';
   o+='<section class="card"><h3>Why the chart says this</h3><ul class="why">'+j.reasons.map(r=>'<li class="'+(r.w>0?'plus':r.w<0?'minus':'')+'">'+(r.w>0?'+ ':r.w<0?'− ':'')+esc(r.t)+'</li>').join('')+'</ul><p class="small">'+esc(j.modeNote)+'</p><p class="mut small">You are the lagna ('+JT.SIGNS[C.lagna]+', lord '+j.L1+'). This question belongs to the '+ord(j.house)+' house'+(x.cat==='health'?'':', ruled by '+j.Lq)+'.</p></section>';
   o+='<section class="card"><h3>Prashna chart</h3>'+pChartSVG(C)+'<p class="mut small">Cast for '+esc(x.when)+' at '+esc(x.place)+'. Lahiri ayanamsa. (R) = retrograde.</p></section>';
   o+='<section class="card"><h3>What to do now</h3><p>'+esc(j.verdict==='yes'?'Act on it while the planets support you. Move first, keep your words kind and clear.':j.verdict==='likely'?'It can work, but it needs your effort. Take one practical step this week.':j.verdict==='mixed'?'Do not force it now. Gather more facts and ask again after a few days with a calm mind.':'This is not the right time. Protect your peace, look after yourself, and let the matter rest for now.')+'</p>'+(S.profile&&CH?'<button class="btn ghost" data-act="askq" data-v="'+esc(K.q)+'">See what your birth chart says too</button>':'<button class="btn ghost" data-act="tab" data-v="onboard">Make your free birth kundli</button>')+'</section>';
@@ -1818,7 +1850,7 @@ function parseBirth(f){const d=(f.dob.value||'').split('-').map(Number),t=(f.tob
   const b={y:d[0],m:d[1],d:d[2],hh:t[0],mm:t[1],tz,lat,lon};return validBirth(b)?{b,ci,place:label,tzn}:null;}
 document.addEventListener('submit',(e)=>{e.preventDefault();const f=e.target;if(f.id==='pf'){let lat,lon,place;if(f.pmode&&f.pmode.value==='m'){lat=parseFloat(f.mlat.value);lon=parseFloat(f.mlon.value);place='Lat '+lat.toFixed(2)+', Lon '+lon.toFixed(2);}else{lat=parseFloat(f.plat.value);lon=parseFloat(f.plon.value);place=(f.place.value||'').trim().slice(0,80)||'your location';}
     if(!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>66||Math.abs(lon)>180){$('#perr').textContent='Please pick your current town from the list, or press "Use my current location".';return;}
-    const d=new Date(),cat=PR.CATS[S.sel.pcat]?S.sel.pcat:'love';const x={id:String(d.getTime()),cat,q:(f.q.value||'').trim().slice(0,200),day:todayKey(d),when:d.toLocaleString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}),place,lat:+lat.toFixed(4),lon:+lon.toFixed(4),u:[d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate(),d.getUTCHours(),d.getUTCMinutes()]};
+    const d=new Date(),q0=(f.q.value||'').trim(),chip=PR.CATS[S.sel.pcat]?S.sel.pcat:'love',tp=PR.topicOf(q0),cat=tp&&tp!==chip?tp:chip;if(tp&&tp!==chip&&(S.prashna||[]).find(e=>e.cat===tp&&e.day===todayKey(d))){S.sel.pcat=tp;render();return;}const x={id:String(d.getTime()),cat,auto:tp&&tp!==chip?1:0,q:q0.slice(0,200),day:todayKey(d),when:d.toLocaleString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}),place,lat:+lat.toFixed(4),lon:+lon.toFixed(4),u:[d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate(),d.getUTCHours(),d.getUTCMinutes()]};
     S.prashna=[x].concat(S.prashna||[]).slice(0,30);save();go('pr:'+x.id);return;}
 if(f.id==='ob'){const name=f.name.value.trim().slice(0,40);const r=parseBirth(f);if(!name||!r||!f.consent.checked||!f.age.checked){$('#oerr').textContent='Please check your details, pick your birth place from the list (or enter coordinates) and tick the two confirmations.';return;}S.profile={name,birth:r.b,city:r.ci,place:r.place||undefined,tzn:r.tzn||undefined};S.consent=true;S.tab='home';ROUTE=null;rebuild();applyDeep();save();render();}
   else if(f.id==='lf'){const em=String(f.email.value).trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(em)){LOGIN.msg='Enter a valid email address.';render();return;}
