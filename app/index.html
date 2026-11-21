@@ -1115,6 +1115,145 @@ function makePrashna(JT) {
 }
 if (typeof module !== 'undefined') module.exports = makePrashna;
 
+// KP (Krishnamurti Paddhati) horary: number 1-249 fixes the ascendant, Placidus cusps,
+// star/sub lords, 4-level significators, cuspal sub-lord judgment and ruling planets.
+function makeKP(JT) {
+  'use strict';
+  const D2R = Math.PI / 180, R2D = 180 / Math.PI, NAK = 360 / 27;
+  const norm = (x) => ((x % 360) + 360) % 360;
+  const sin = (d) => Math.sin(d * D2R), cos = (d) => Math.cos(d * D2R), tan = (d) => Math.tan(d * D2R);
+  const ORDER = JT.DASHA_ORDER; // [[lord, years]] from Ketu
+  const IDX = {}; ORDER.forEach(([p], i) => { IDX[p] = i; });
+  const KP_SHIFT = 0.0967; // KP ayanamsa is about 5'48" less than Lahiri
+  const DAY = ['Sun', 'Moon', 'Mars', 'Mercury', 'Jupiter', 'Venus', 'Saturn'];
+
+  function lords(lon) {
+    lon = norm(lon);
+    const n = Math.floor(lon / NAK), star = ORDER[n % 9][0];
+    let pos = lon - n * NAK, i = IDX[star];
+    for (let k = 0; k < 9; k++) {
+      const [p, y] = ORDER[(i + k) % 9], len = NAK * y / 120;
+      if (pos < len || k === 8) return { sign: JT.LORDS[Math.floor(lon / 30)], star, sub: p };
+      pos -= len;
+    }
+  }
+
+  // The 249 KP horary divisions (27 stars x 9 subs, cut again where a sign ends).
+  const TABLE = (function () {
+    const t = []; let start = 0;
+    for (let n = 0; n < 27; n++) {
+      const i = n % 9;
+      for (let k = 0; k < 9; k++) {
+        const [p, y] = ORDER[(i + k) % 9], end = start + NAK * y / 120;
+        const cut = Math.floor(start / 30 + 1e-9) * 30 + 30;
+        if (end > cut + 1e-9 && cut < 360) { t.push({ from: start, sub: p }); t.push({ from: cut, sub: p }); }
+        else t.push({ from: start, sub: p });
+        start = end;
+      }
+    }
+    return t;
+  })();
+
+  function obliq(jd) { return 23.439291 - 0.0130042 * ((jd - 2451545) / 36525); }
+  function ascOf(ramc, lat, eps) { return norm(Math.atan2(cos(ramc), -(sin(ramc) * cos(eps) + tan(lat) * sin(eps))) * R2D); }
+  function raToLon(ra, eps) { return norm(Math.atan2(sin(ra), cos(ra) * cos(eps)) * R2D); }
+  function ramcFor(ascTrop, lat, eps) {
+    let best = 0, bd = 999;
+    for (let r = 0; r < 360; r += 0.5) { let d = norm(ascOf(r, lat, eps) - ascTrop); if (d > 180) d -= 360; if (Math.abs(d) < bd) { bd = Math.abs(d); best = r; } }
+    let lo = best - 1, hi = best + 1;
+    for (let k = 0; k < 50; k++) { const m = (lo + hi) / 2; let d = norm(ascOf(m, lat, eps) - ascTrop); if (d > 180) d -= 360; if (d > 0) hi = m; else lo = m; }
+    return norm((lo + hi) / 2);
+  }
+  function placidus(ramc, lat, eps) {
+    const c = new Array(13);
+    c[1] = ascOf(ramc, lat, eps); c[10] = raToLon(ramc, eps);
+    const cusp = (off, f, below) => {
+      let lon = raToLon(ramc + off, eps);
+      for (let k = 0; k < 30; k++) {
+        const dec = Math.asin(sin(eps) * sin(lon)) * R2D;
+        let x = tan(lat) * tan(dec); x = Math.max(-1, Math.min(1, x));
+        const ad = Math.asin(x) * R2D;
+        const ra = below ? ramc + 180 - f * (90 - ad) : ramc + f * (90 + ad);
+        lon = raToLon(ra, eps);
+      }
+      return lon;
+    };
+    c[11] = cusp(30, 1 / 3, false); c[12] = cusp(60, 2 / 3, false);
+    c[2] = cusp(120, 2 / 3, true); c[3] = cusp(150, 1 / 3, true);
+    c[4] = norm(c[10] + 180); c[5] = norm(c[11] + 180); c[6] = norm(c[12] + 180); c[7] = norm(c[1] + 180); c[8] = norm(c[2] + 180); c[9] = norm(c[3] + 180);
+    return c;
+  }
+
+  // Groups: primary cusp, favourable houses, houses that deny.
+  const G = {
+    love: [5, [5, 7, 11], [4, 6, 10]], ex: [7, [2, 7, 11], [1, 6, 10]], marriage: [7, [2, 7, 11], [1, 6, 10]],
+    job: [10, [2, 6, 10, 11], [5, 8, 12]], business: [7, [2, 7, 10, 11], [5, 8, 12]], money: [11, [2, 6, 11], [5, 8, 12]],
+    exam: [4, [4, 9, 11], [3, 8, 12]], health: [1, [1, 5, 11], [6, 8, 12]], travel: [9, [3, 9, 12], [2, 4, 11]],
+    property: [4, [4, 11, 12], [3, 5, 10]], lost: [2, [2, 6, 11], [5, 8, 12]], legal: [6, [1, 6, 11], [5, 7, 12]],
+    child: [5, [2, 5, 11], [1, 4, 10]],
+  };
+
+  // n: 1-249 (0 = time based). jd: UTC moment. lat, lon: where the question is asked.
+  function cast(n, jd, lat, lon) {
+    const eps = obliq(jd), ay = JT.ayanamsa(jd) - KP_SHIFT;
+    let ramc;
+    if (n >= 1 && n <= 249) ramc = ramcFor(norm(TABLE[n - 1].from + 0.0005 + ay), lat, eps);
+    else ramc = norm(JT.gmstDeg(jd) + lon);
+    const cuspT = placidus(ramc, lat, eps), cusps = cuspT.map((x) => (x === undefined ? x : norm(x - ay)));
+    const sid = JT.siderealAll(jd), sp = JT.siderealAll(jd + 0.5), sm = JT.siderealAll(jd - 0.5);
+    const P = {};
+    JT.PLANETS.forEach((p) => {
+      const L = norm(sid[p] + KP_SHIFT);
+      let s = sp[p] - sm[p]; if (s > 180) s -= 360; if (s < -180) s += 360;
+      let h = 12;
+      for (let k = 1; k <= 12; k++) { const a = cusps[k], b = cusps[k % 12 + 1], w = norm(b - a); if (norm(L - a) < w) { h = k; break; } }
+      P[p] = Object.assign({ lon: L, house: h, retro: p === 'Rahu' || p === 'Ketu' ? false : s < 0 }, lords(L));
+    });
+    const owns = {}; JT.PLANETS.forEach((p) => { owns[p] = []; });
+    for (let h = 1; h <= 12; h++) owns[JT.LORDS[Math.floor(cusps[h] / 30)]].push(h);
+    // 4-level significators: star lord's house and houses, own house and houses; nodes also act for their sign lord.
+    const sig = {};
+    JT.PLANETS.forEach((p) => {
+      const st = P[p].star, set = new Set([P[st].house, ...owns[st], P[p].house, ...owns[p]]);
+      if (p === 'Rahu' || p === 'Ketu') { const sl = P[p].sign; set.add(P[sl].house); owns[sl].forEach((h) => set.add(h)); }
+      sig[p] = [...set].sort((a, b) => a - b);
+    });
+    // Ruling planets at the moment of judgment.
+    const loc = jd + lon / 360 + 0.5, wd = DAY[Math.floor(loc + 1) % 7];
+    const al = lords(cusps[1]), ml = lords(P.Moon.lon);
+    const RP = [...new Set([al.star, al.sign, ml.star, ml.sign, wd, al.sub])];
+    return { n, ramc, cusps, P, owns, sig, RP, ascLords: al, moonLords: ml, dayLord: wd, jd };
+  }
+
+  function judge(K, cat) {
+    const g = G[cat] || G.love, [pc, fav, neg] = g, R = [];
+    let s = 0; const add = (w, t) => { s += w; R.push({ w, t }); };
+    const csl = lords(K.cusps[pc]).sub, cs = K.P[csl], st = cs.star;
+    const A = K.sig[st], B = K.sig[cs.sub];
+    const f = (arr, set) => arr.filter((h) => set.includes(h));
+    const fa = f(A, fav), na = f(A, neg), fb = f(B, fav), nb = f(B, neg);
+    R.push({ w: 0, t: 'KP: the sub-lord of the ' + ord(pc) + ' cusp is ' + csl + '. It sits in the star of ' + st + ', which signifies houses ' + A.join(', ') + '.' });
+    if (fa.length) add(fa.length, 'KP: ' + st + ' (star lord of the cusp sub-lord) signifies the helpful ' + (fa.length > 1 ? 'houses ' + fa.join(', ') : 'house ' + fa[0]) + '.');
+    if (na.length) add(-na.length, 'KP: it also signifies ' + (na.length > 1 ? 'houses ' + na.join(', ') + ', which block' : 'house ' + na[0] + ', which blocks') + ' this matter.');
+    if (A.includes(pc)) add(1, 'KP: the ' + ord(pc) + ' house itself is signified, so the matter is promised.');
+    else add(-1, 'KP: the ' + ord(pc) + ' house itself is not signified by the star lord.');
+    const sb = (fb.length - nb.length) * 0.5;
+    if (sb) add(sb, 'KP: the deciding sub (' + cs.sub + ') ' + (sb > 0 ? 'confirms it through houses ' + fb.join(', ') : 'leans against it through houses ' + nb.join(', ')) + '.');
+    if (K.P[st].retro) add(-1, 'KP: ' + st + ' is retrograde, which brings delay or a second attempt.');
+    if (K.RP.includes(csl) || K.RP.includes(st)) add(1, 'KP: ' + (K.RP.includes(csl) ? csl : st) + ' is among the ruling planets of this moment, which confirms the reading.');
+    const verdict = s >= 3 ? 'yes' : s >= 1 ? 'likely' : s > -1 ? 'mixed' : s > -3 ? 'lean' : 'no';
+    // Timing: next days the Moon moves through the star of a ruling planet that is also a helpful significator.
+    const good = K.RP.filter((p) => K.sig[p].some((h) => fav.includes(h)));
+    let when = null;
+    if (good.length && (verdict === 'yes' || verdict === 'likely')) {
+      for (let d = 0.25; d < 60; d += 0.25) { const m = norm(JT.siderealAll(K.jd + d).Moon + KP_SHIFT); if (good.includes(lords(m).star)) { when = d; break; } }
+    }
+    return { cusp: pc, csl, star: st, sub: cs.sub, A, fav, neg, score: Math.round(s * 10) / 10, verdict, reasons: R, good, whenDays: when };
+  }
+  function ord(n) { return n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'); }
+  return { TABLE, lords, cast, judge, G };
+}
+
 /* Prarabdha paid reports. Pure functions: (chart, dasha, nowJD, extra) -> {title, intro, sections:[{h,p:[...]}]}.
    Runs in the demo app (browser) and on the server (live app). All wording is gentle and reflective: no fear, no guarantees,
    no illness or lifespan claims. Rules are DRAFT until reviewed by a practising Jyotishi. */
@@ -1504,7 +1643,7 @@ function load(){let r=null;try{r=JSON.parse(localStorage.getItem(KEY)||'null');}
   S.tab=pick(r.tab,['home','kundli','learn','match','heal','num','more','onboard'],'home');
   const p=r.profile;if(p&&typeof p==='object'&&typeof p.name==='string'&&p.birth&&typeof p.birth==='object'){const b={};['y','m','d','hh','mm','tz','lat','lon'].forEach(k=>b[k]=Number(p.birth[k]));if(validBirth(b))S.profile={name:p.name.slice(0,40),birth:b,city:Number.isInteger(p.city)?p.city:'x',place:typeof p.place==='string'?p.place.slice(0,80):undefined,tzn:typeof p.tzn==='string'&&/^[A-Za-z0-9_\/+-]{1,40}$/.test(p.tzn)?p.tzn:undefined};}
   S.consent=r.consent===true;
-  S.prashna=Array.isArray(r.prashna)?r.prashna.filter(x=>x&&typeof x==='object'&&typeof x.id==='string'&&/^\d{10,16}$/.test(x.id)&&typeof x.cat==='string'&&/^[a-z]{2,10}$/.test(x.cat)&&Array.isArray(x.u)&&x.u.length===5&&x.u.every(Number.isInteger)&&Number.isFinite(x.lat)&&Number.isFinite(x.lon)&&Math.abs(x.lat)<=66&&Math.abs(x.lon)<=180).slice(0,30).map(x=>({id:x.id,cat:x.cat,auto:x.auto===1?1:0,q:typeof x.q==='string'?x.q.slice(0,200):'',day:typeof x.day==='string'?x.day.slice(0,10):'',when:typeof x.when==='string'?x.when.slice(0,40):'',place:typeof x.place==='string'?x.place.slice(0,80):'',lat:x.lat,lon:x.lon,u:x.u,who:['me','other','none'].includes(x.who)?x.who:undefined,wn:typeof x.wn==='string'?x.wn.slice(0,40):'',nb:x.nb&&typeof x.nb==='object'&&validBirth(['y','m','d','hh','mm','tz','lat','lon'].reduce((o,k)=>(o[k]=Number(x.nb[k]),o),{}))?['y','m','d','hh','mm','tz','lat','lon'].reduce((o,k)=>(o[k]=Number(x.nb[k]),o),{}):undefined})):[];
+  S.prashna=Array.isArray(r.prashna)?r.prashna.filter(x=>x&&typeof x==='object'&&typeof x.id==='string'&&/^\d{10,16}$/.test(x.id)&&typeof x.cat==='string'&&/^[a-z]{2,10}$/.test(x.cat)&&Array.isArray(x.u)&&x.u.length===5&&x.u.every(Number.isInteger)&&Number.isFinite(x.lat)&&Number.isFinite(x.lon)&&Math.abs(x.lat)<=66&&Math.abs(x.lon)<=180).slice(0,30).map(x=>({id:x.id,cat:x.cat,auto:x.auto===1?1:0,q:typeof x.q==='string'?x.q.slice(0,200):'',day:typeof x.day==='string'?x.day.slice(0,10):'',when:typeof x.when==='string'?x.when.slice(0,40):'',place:typeof x.place==='string'?x.place.slice(0,80):'',lat:x.lat,lon:x.lon,u:x.u,kp:Number.isInteger(x.kp)&&x.kp>=1&&x.kp<=249?x.kp:0,who:['me','other','none'].includes(x.who)?x.who:undefined,wn:typeof x.wn==='string'?x.wn.slice(0,40):'',nb:x.nb&&typeof x.nb==='object'&&validBirth(['y','m','d','hh','mm','tz','lat','lon'].reduce((o,k)=>(o[k]=Number(x.nb[k]),o),{}))?['y','m','d','hh','mm','tz','lat','lon'].reduce((o,k)=>(o[k]=Number(x.nb[k]),o),{}):undefined})):[];
   S.token=(typeof r.token==='string'&&/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(r.token)&&r.token.length<1000)?r.token:null;
   if(r.days&&typeof r.days==='object'){S.days={};for(let i=1;i<=21;i++)if(r.days[i]===1)S.days[i]=1;}
   S.paid={};/* entitlements are NEVER trusted from device storage; the live app asks the server */
@@ -1801,12 +1940,14 @@ function vHome2(){const h=new Date().getHours(),g=h<12?'Good morning':h<17?'Good
   o+='<h2 class="sec">More tools</h2><div class="feats">'+feat('kundli','Prashna Kundali','Yes or no, cast this minute','go','prashna')+feat('rings','Gun Milan','Match two kundlis','tab','match')+feat('lotus','Chakra healing','Exercises and 21 days','tab','heal')+feat('num','Numerology','Numbers and your year','tab','num')+feat('palm','Palm reading','Photo or guide','go','palm')+feat('kundli','Your kundli','Charts, dasha, yogas','tab','kundli')+feat('learn','Learn Jyotish','From your own chart','tab','learn')+'</div><p class="mut small">'+DISC+'</p>';return o;}
 
 // ---------- Prashna kundli (horary) ----------
-const PR=(typeof makePrashna==='function')?makePrashna(JT):null;
+const PR=(typeof makePrashna==='function')?makePrashna(JT):null;const KPX=(typeof makeKP==='function')?makeKP(JT):null;
 const PCAT_IC={love:'heart',ex:'rings',marriage:'rings',job:'work',business:'work',money:'coin',exam:'book',health:'leaf',travel:'plan',property:'home',lost:'num',legal:'kundli',child:'lotus'};
 let PGEO=null;
 function todayKey(d){d=d||new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function natalOf(x){if(x.who==='none')return null;if(x.nb){try{return JT.computeChart(x.nb);}catch(e){return null;}}return x.who?null:(S.profile&&CH?CH:null);}
-function pMeter(sc){const v=Math.max(-6,Math.min(6,sc)),pc=Math.round((v+6)/12*100);return '<div class="pmeter" role="img" aria-label="Strength '+pc+' out of 100"><span style="width:'+pc+'%"></span></div><p class="small mut">Strength '+pc+'/100 (score '+(sc>0?'+':'')+sc+')</p>';}
+const VTX={strong:['A clear yes','स्पष्ट हाँ'],yes:['Yes, the signs are favourable','हाँ, योग अनुकूल हैं'],likely:['Likely, with your effort','संभावना है, प्रयास से'],mixed:['Mixed, not clear yet','मिश्रित, अभी स्पष्ट नहीं'],lean:['Leaning towards no, for now','अभी झुकाव ना की ओर'],no:['Unlikely right now','अभी संभावना कम है']};
+function pAll(x){const C=JT.computeChart(pAt(x)),N=natalOf(x),j=PR.judge(C,x.cat,N);let K=null,kj=null;if(KPX){try{K=KPX.cast(x.kp||0,C.jd,x.lat,x.lon);kj=KPX.judge(K,x.cat);}catch(e){K=null;kj=null;}}const tot=Math.round((j.score+(kj?kj.score:0))*10)/10;const v=kj?(tot>=6?'strong':tot>=3.5?'yes':tot>=1.5?'likely':tot>-1?'mixed':tot>-3.5?'lean':'no'):j.verdict;return {C,N,j,K,kj,tot,v,title:VTX[v][0],title_hi:VTX[v][1]};}
+function pMeter(sc,rg){rg=rg||6;const v=Math.max(-rg,Math.min(rg,sc)),pc=Math.round((v+rg)/(2*rg)*100);return '<div class="pmeter" role="img" aria-label="Strength '+pc+' out of 100"><span style="width:'+pc+'%"></span></div><p class="small mut">Strength '+pc+'/100 (score '+(sc>0?'+':'')+sc+')</p>';}
 function pAt(e){return {y:e.u[0],m:e.u[1],d:e.u[2],hh:e.u[3],mm:e.u[4],tz:0,lat:e.lat,lon:e.lon};}
 function pChartSVG(C){let o='<svg viewBox="0 0 400 400" class="chart" role="img" aria-label="Prashna chart">';
   for(let h=1;h<=12;h++)o+='<polygon points="'+POLY[h]+'" class="hp"/>';
@@ -1819,20 +1960,21 @@ function vPrashna(){if(!PR)return vHome2();const cat=PR.CATS[S.sel.pcat]?S.sel.p
   o+='<section class="card"><h3>1. What is your question about?</h3><div class="chips">'+Object.keys(PR.CATS).map(k=>'<button type="button" class="chip'+(k===cat?' on':'')+'" data-act="pcat" data-v="'+k+'">'+esc(PR.CATS[k].en)+'</button>').join('')+'</div></section>';
   if(done)o+='<div class="warn" role="note">You asked about <b>'+esc(K.en.toLowerCase())+'</b> at '+esc(done.when)+'. <button class="linkb" data-act="go" data-v="pr:'+done.id+'">See that answer</button>. A new question asked within a few minutes reads almost the same sky, so it will differ mainly through the birth details you choose below.</div>';
   {const pl=PGEO?{label:'Current location ('+PGEO.lat.toFixed(2)+', '+PGEO.lon.toFixed(2)+')',lat:PGEO.lat,lon:PGEO.lon,tz:5.5}:(S.profile?{label:S.profile.place||'',lat:S.profile.birth.lat,lon:S.profile.birth.lon,tz:S.profile.birth.tz,tzn:S.profile.tzn}:null);
-    o+='<form id="pf" class="card" autocomplete="off"><h3>2. Ask it in your own words</h3><textarea name="q" maxlength="200" rows="2" placeholder="'+esc(K.q)+'"></textarea><h3>3. Whose question is it?</h3><div class="chips" role="radiogroup">'+(S.profile&&CH?'<label class="chip"><input type="radio" name="who" value="me" checked> Mine ('+esc(S.profile.name)+')</label>':'')+'<label class="chip"><input type="radio" name="who" value="other"'+(S.profile&&CH?'':' checked')+'> Someone else / other details</label><label class="chip"><input type="radio" name="who" value="none"> No birth details</label></div><div class="card sub" data-other><p class="mut small">For "someone else": enter their birth details. Leave empty to read the moment alone.</p><label>Name (optional)<input name="wn" maxlength="40"></label><div class="row2"><label>Date of birth<input type="date" name="ndob" min="1900-01-01" max="2100-12-31"></label><label>Time of birth<input type="time" name="ntob"></label></div><label>Birth city<select name="ncity">'+CITIES.map((c,i)=>'<option value="'+i+'">'+esc(c[0])+'</option>').join('')+'</select></label></div><h3>4. Where are you right now?</h3><button type="button" class="btn ghost" data-act="pgeo">Use my current location</button>'+placeField(pl,'Your current town or city')+'<p class="mut small">Close your eyes for a moment, think of the question clearly, then press the button. The time is taken from your phone.</p><p class="mut small">How it works: a Prashna reads the sky at the minute you ask, for the topic you ask about.'+(S.profile&&CH?' It is then matched with your own birth star and Moon sign, so two people asking at the same minute can get different answers.':' Save your birth details to make it personal to you.')+'</p><button class="btn" type="submit">Cast my Prashna now</button><p class="err" id="perr" role="alert"></p></form>';}
+    o+='<form id="pf" class="card" autocomplete="off"><h3>2. Ask it in your own words</h3><textarea name="q" maxlength="200" rows="2" placeholder="'+esc(K.q)+'"></textarea><h3>3. Whose question is it?</h3><div class="chips" role="radiogroup">'+(S.profile&&CH?'<label class="chip"><input type="radio" name="who" value="me" checked> Mine ('+esc(S.profile.name)+')</label>':'')+'<label class="chip"><input type="radio" name="who" value="other"'+(S.profile&&CH?'':' checked')+'> Someone else / other details</label><label class="chip"><input type="radio" name="who" value="none"> No birth details</label></div><div class="card sub" data-other><p class="mut small">For "someone else": enter their birth details. Leave empty to read the moment alone.</p><label>Name (optional)<input name="wn" maxlength="40"></label><div class="row2"><label>Date of birth<input type="date" name="ndob" min="1900-01-01" max="2100-12-31"></label><label>Time of birth<input type="time" name="ntob"></label></div><label>Birth city<select name="ncity">'+CITIES.map((c,i)=>'<option value="'+i+'">'+esc(c[0])+'</option>').join('')+'</select></label></div><h3>4. Your KP number (1 to 249)</h3><p class="mut small">Close your eyes, think of the question, and type the first number from 1 to 249 that comes to mind. Leave it empty to use the time-based KP chart.</p><input name="kpn" type="number" min="1" max="249" step="1" inputmode="numeric" placeholder="e.g. 108"><h3>5. Where are you right now?</h3><button type="button" class="btn ghost" data-act="pgeo">Use my current location</button>'+placeField(pl,'Your current town or city')+'<p class="mut small">Close your eyes for a moment, think of the question clearly, then press the button. The time is taken from your phone.</p><p class="mut small">How it works: a Prashna reads the sky at the minute you ask, for the topic you ask about.'+(S.profile&&CH?' It is then matched with your own birth star and Moon sign, so two people asking at the same minute can get different answers.':' Save your birth details to make it personal to you.')+'</p><button class="btn" type="submit">Cast my Prashna now</button><p class="err" id="perr" role="alert"></p></form>';}
   const hist=(S.prashna||[]).slice(0,8);
-  if(hist.length)o+='<h2 class="sec">My Prashnas</h2>'+hist.map(x=>{let j=null;try{j=PR.judge(JT.computeChart(pAt(x)),x.cat,natalOf(x));}catch(e){}return '<button class="tile wide" data-act="go" data-v="pr:'+x.id+'"><b>'+esc(PR.CATS[x.cat].en)+(x.q?': '+esc(x.q):'')+'</b><small>'+esc(x.when)+' · '+(x.who==='other'?esc('for '+(x.wn||'someone else'))+' · ':x.who==='none'?'no birth details · ':'')+(j?esc(j.title):'')+'</small></button>';}).join('');
+  if(hist.length)o+='<h2 class="sec">My Prashnas</h2>'+hist.map(x=>{let j=null;try{j=pAll(x);}catch(e){}return '<button class="tile wide" data-act="go" data-v="pr:'+x.id+'"><b>'+esc(PR.CATS[x.cat].en)+(x.q?': '+esc(x.q):'')+'</b><small>'+esc(x.when)+' · '+(x.kp?'KP '+x.kp+' · ':'')+(x.who==='other'?esc('for '+(x.wn||'someone else'))+' · ':x.who==='none'?'no birth details · ':'')+(j?esc(j.title):'')+'</small></button>';}).join('');
   return o+'<p class="mut small">Follows classical Prashna rules (Prashna Tantra, Tajik Neelakanthi, Prashna Marga). '+DISC+'</p>';}
-function vPrashnaResult(id){const x=(S.prashna||[]).find(e=>e.id===id);if(!x||!PR)return vPrashna();const C=JT.computeChart(pAt(x)),N=natalOf(x),j=PR.judge(C,x.cat,N),K=PR.CATS[x.cat];
-  const col={strong:'good',yes:'good',likely:'good',mixed:'mid',lean:'bad',no:'bad'}[j.verdict];
+function vPrashnaResult(id){const x=(S.prashna||[]).find(e=>e.id===id);if(!x||!PR)return vPrashna();const A=pAll(x),C=A.C,N=A.N,j=A.j,K=PR.CATS[x.cat],KJ=A.kj,KC=A.K;
+  const col={strong:'good',yes:'good',likely:'good',mixed:'mid',lean:'bad',no:'bad'}[A.v];const vt=(v)=>VTX[v][0];const kshort=['love','ex','lost','money','exam'].includes(x.cat);const kwhen=KJ&&kshort&&KJ.whenDays!==null?new Date(Date.UTC(x.u[0],x.u[1]-1,x.u[2],x.u[3],x.u[4])+KJ.whenDays*864e5).toLocaleDateString('en-IN',{day:'numeric',month:'short'}):null;
   let o='<button class="back" data-act="go" data-v="prashna">&larr; Back</button>'+head('Prashna: '+K.en,(x.q?'"'+x.q+'" · ':'')+x.when+' · '+x.place);
-  o+='<section class="card verdict '+col+'"><p class="small mut">The answer</p><h2>'+esc(j.title)+'</h2><p>'+esc(j.title_hi)+'</p>'+pMeter(j.score)+'<p class="small">'+esc(N?'Read for '+(x.who==='other'?(x.wn||'the person asked about'):'you')+': the moment of the question plus '+(x.who==='other'?'their':'your')+' birth star, Moon sign and lagna.':'Read from the moment alone, without birth details.')+'</p>'+(j.when?'<p><b>Timing:</b> '+esc(j.when)+', going by how fast the planets are closing in.</p>':'')+'</section>';
+  o+='<section class="card verdict '+col+'"><p class="small mut">The answer</p><h2>'+esc(A.title)+'</h2><p>'+esc(A.title_hi)+'</p>'+pMeter(A.tot,KJ?12:6)+(KJ?'<p class="small">Classic Prashna: <b>'+esc(vt(j.verdict))+'</b> ('+(j.score>0?'+':'')+j.score+') · KP '+(x.kp?'number '+x.kp:'time-based')+': <b>'+esc(vt(KJ.verdict))+'</b> ('+(KJ.score>0?'+':'')+KJ.score+')</p>':'')+'<p class="small">'+esc(N?'Read for '+(x.who==='other'?(x.wn||'the person asked about'):'you')+': the moment of the question plus '+(x.who==='other'?'their':'your')+' birth star, Moon sign and lagna.':'Read from the moment alone, without birth details.')+'</p>'+((A.v==='strong'||A.v==='yes'||A.v==='likely')&&(j.when||kwhen||(KJ&&!kshort&&KJ.good.length))?'<p><b>Timing:</b> '+(j.when?esc(j.when)+', going by how fast the planets are closing in.':'')+(kwhen?' KP: a good window opens around <b>'+esc(kwhen)+'</b>, when the Moon enters the star of a ruling planet.':'')+(KJ&&!kshort&&KJ.good.length?' KP: it comes through the periods of <b>'+esc(KJ.good.join(', '))+'</b>; see your dasha in the Kundli tab.':'')+'</p>':'')+'</section>';
   if(x.auto)o+='<div class="warn" role="note">Your words are about <b>'+esc(K.en.toLowerCase())+'</b>, so the chart was read for that topic.</div>';
   if(j.caution)o+='<div class="warn" role="note">'+esc(j.caution)+'</div>';
   if(!N)o+='<p class="mut small">This answer comes from the moment alone. Save your birth details to add your own birth star and Moon sign to the reading.</p>';
   o+='<section class="card"><h3>Why the chart says this</h3><ul class="why">'+j.reasons.map(r=>'<li class="'+(r.w>0?'plus':r.w<0?'minus':'')+'">'+(r.w>0?'+ ':r.w<0?'− ':'')+esc(r.t)+'</li>').join('')+'</ul><p class="small">'+esc(j.modeNote)+'</p><p class="mut small">You are the lagna ('+JT.SIGNS[C.lagna]+', lord '+j.L1+'). This question belongs to the '+ord(j.house)+' house'+(x.cat==='health'?'':', ruled by '+j.Lq)+'.</p></section>';
+  if(KJ)o+='<section class="card"><h3>KP reading · '+(x.kp?'number '+x.kp:'time-based')+'</h3><ul class="why">'+KJ.reasons.map(r=>'<li class="'+(r.w>0?'plus':r.w<0?'minus':'')+'">'+(r.w>0?'+ ':r.w<0?'− ':'')+esc(r.t)+'</li>').join('')+'</ul><p class="small">Helpful houses for this question: '+KJ.fav.join(', ')+'. Houses that deny it: '+KJ.neg.join(', ')+'.</p><p class="mut small">Ruling planets now: '+esc(KC.RP.join(', '))+'. KP lagna '+esc(JT.SIGNS[Math.floor(KC.cusps[1]/30)])+' '+(KC.cusps[1]%30).toFixed(1)+'°, Placidus cusps, KP ayanamsa.</p></section>';
   o+='<section class="card"><h3>Prashna chart</h3>'+pChartSVG(C)+'<p class="mut small">Cast for '+esc(x.when)+' at '+esc(x.place)+'. Lahiri ayanamsa. (R) = retrograde.</p></section>';
-  o+='<section class="card"><h3>What to do now</h3><p>'+esc(j.verdict==='strong'||j.verdict==='yes'?'Act on it while the planets support you. Move first, keep your words kind and clear.':j.verdict==='likely'?'It can work, but it needs your effort. Take one practical step this week.':j.verdict==='lean'?'The chart leans against it for now. Wait, prepare quietly, and ask again after some days.':j.verdict==='mixed'?'Do not force it now. Gather more facts and ask again after a few days with a calm mind.':'This is not the right time. Protect your peace, look after yourself, and let the matter rest for now.')+'</p>'+(S.profile&&CH?'<button class="btn ghost" data-act="askq" data-v="'+esc(K.q)+'">See what your birth chart says too</button>':'<button class="btn ghost" data-act="tab" data-v="onboard">Make your free birth kundli</button>')+'</section>';
+  o+='<section class="card"><h3>What to do now</h3><p>'+esc(A.v==='strong'||A.v==='yes'?'Act on it while the planets support you. Move first, keep your words kind and clear.':A.v==='likely'?'It can work, but it needs your effort. Take one practical step this week.':A.v==='lean'?'The chart leans against it for now. Wait, prepare quietly, and ask again after some days.':A.v==='mixed'?'Do not force it now. Gather more facts and ask again after a few days with a calm mind.':'This is not the right time. Protect your peace, look after yourself, and let the matter rest for now.')+'</p>'+(S.profile&&CH?'<button class="btn ghost" data-act="askq" data-v="'+esc(K.q)+'">See what your birth chart says too</button>':'<button class="btn ghost" data-act="tab" data-v="onboard">Make your free birth kundli</button>')+'</section>';
   return o+'<p class="mut small">'+DISC+'</p>';}
 
 let ROUTE=null;
@@ -1860,7 +2002,8 @@ function parseBirth(f){const d=(f.dob.value||'').split('-').map(Number),t=(f.tob
 document.addEventListener('submit',(e)=>{e.preventDefault();const f=e.target;if(f.id==='pf'){let lat,lon,place;if(f.pmode&&f.pmode.value==='m'){lat=parseFloat(f.mlat.value);lon=parseFloat(f.mlon.value);place='Lat '+lat.toFixed(2)+', Lon '+lon.toFixed(2);}else{lat=parseFloat(f.plat.value);lon=parseFloat(f.plon.value);place=(f.place.value||'').trim().slice(0,80)||'your location';}
     if(!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>66||Math.abs(lon)>180){$('#perr').textContent='Please pick your current town from the list, or press "Use my current location".';return;}
     const d=new Date(),q0=(f.q.value||'').trim(),chip=PR.CATS[S.sel.pcat]?S.sel.pcat:'love',tp=PR.topicOf(q0),cat=tp&&tp!==chip?tp:chip;let who=(f.who&&f.who.value)||(S.profile&&CH?'me':'none'),nb,wn='';if(who==='me'&&S.profile&&validBirth(S.profile.birth))nb=Object.assign({},S.profile.birth);else if(who==='me')who='none';if(who==='other'){const dd=(f.ndob.value||'').split('-').map(Number),tt=(f.ntob.value||'').split(':').map(Number),c=CITIES[+f.ncity.value]||CITIES[0];wn=(f.wn.value||'').trim().slice(0,40);if(f.ndob.value){const b={y:dd[0],m:dd[1],d:dd[2],hh:f.ntob.value?tt[0]:12,mm:f.ntob.value?tt[1]:0,tz:5.5,lat:c[1],lon:c[2]};if(!validBirth(b)){$('#perr').textContent='Please check the birth date and time.';return;}nb=b;}else who='none';}
-    const x={id:String(d.getTime()),cat,auto:tp&&tp!==chip?1:0,q:q0.slice(0,200),day:todayKey(d),when:d.toLocaleString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}),place,who,wn,nb,lat:+lat.toFixed(4),lon:+lon.toFixed(4),u:[d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate(),d.getUTCHours(),d.getUTCMinutes()]};
+    const kv=(f.kpn&&f.kpn.value||'').trim();let kp=0;if(kv){kp=Number(kv);if(!Number.isInteger(kp)||kp<1||kp>249){$('#perr').textContent='The KP number must be a whole number from 1 to 249.';return;}}
+    const x={id:String(d.getTime()),cat,kp,auto:tp&&tp!==chip?1:0,q:q0.slice(0,200),day:todayKey(d),when:d.toLocaleString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}),place,who,wn,nb,lat:+lat.toFixed(4),lon:+lon.toFixed(4),u:[d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate(),d.getUTCHours(),d.getUTCMinutes()]};
     S.prashna=[x].concat(S.prashna||[]).slice(0,30);save();go('pr:'+x.id);return;}
 if(f.id==='ob'){const name=f.name.value.trim().slice(0,40);const r=parseBirth(f);if(!name||!r||!f.consent.checked||!f.age.checked){$('#oerr').textContent='Please check your details, pick your birth place from the list (or enter coordinates) and tick the two confirmations.';return;}S.profile={name,birth:r.b,city:r.ci,place:r.place||undefined,tzn:r.tzn||undefined};S.consent=true;S.tab='home';ROUTE=null;rebuild();applyDeep();save();render();}
   else if(f.id==='lf'){const em=String(f.email.value).trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(em)){LOGIN.msg='Enter a valid email address.';render();return;}
